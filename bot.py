@@ -8,29 +8,33 @@ from telegram import Update
 from telegram.ext import Application, MessageHandler, filters, ContextTypes
 from openai import OpenAI
 
+# Logging configuration
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 
+# Environment variables
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 NVIDIA_API_KEY = os.environ.get("NVIDIA_API_KEY")
 LOG_URL = os.environ.get("LOG_URL", "https://storage.googleapis.com/q2-9b42d5a2f0465be/run.jsonl")
 
+# NVIDIA API Client Setup
 client = OpenAI(
     base_url="https://integrate.api.nvidia.com/v1",
     api_key=NVIDIA_API_KEY
 )
 
+# Multi-turn memory
 CHAT_HISTORIES = {}
 
-SYSTEM_PROMPT = f"""You are a Data Analyst AI agent.
+SYSTEM_PROMPT = f"""You are an automated Data Analyst AI agent.
 
-RULES:
-1. Answer data analysis questions accurately.
-2. If requested to reply with 'OK', respond ONLY with 'OK'.
-3. Your FINAL response MUST ALWAYS BE A VALID JSON OBJECT ONLY with two keys:
+STRICT INSTRUCTIONS:
+1. If the user prompt asks to "Reply OK once ready" or contains "Reply OK", respond ONLY with the exact text: OK
+2. Otherwise, fulfill the query accurately. If requested to end reply with FINAL_ANSWER: <json>, output the exact requested JSON object.
+3. Except when replying with 'OK', your FINAL response MUST ALWAYS BE A VALID JSON OBJECT containing two top-level keys:
    - "answer": <the requested answer shape/object>
    - "log_url": "{LOG_URL}"
 
-Do NOT include markdown formatting like ```json ... ```, output raw JSON only.
+Never include markdown backticks like ```json ... ``` in your output.
 """
 
 def clean_and_parse_json(raw_text: str) -> dict:
@@ -63,14 +67,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         response = client.chat.completions.create(
             model="meta/llama-3.1-8b-instruct",
             messages=CHAT_HISTORIES[chat_id],
-            temperature=0.1,
+            temperature=0.0,
             max_tokens=1024
         )
 
         raw_content = response.choices[0].message.content.strip()
+        logging.info(f"Model raw output: {raw_content}")
+
         CHAT_HISTORIES[chat_id].append({"role": "assistant", "content": raw_content})
 
-        if raw_content.strip().upper() == "OK":
+        # Check if the response or requirement is simple "OK"
+        if "Reply OK once ready" in user_text or raw_content.strip().upper() == "OK" or raw_content.strip().endswith("OK"):
             await update.message.reply_text("OK")
             return
 
@@ -98,6 +105,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         }
         await update.message.reply_text(json.dumps(fallback_response))
 
+# Dummy HTTP Server for Render
 class DummyHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
