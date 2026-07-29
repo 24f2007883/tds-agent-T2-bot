@@ -2,25 +2,23 @@ import os
 import json
 import logging
 import re
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from telegram import Update
 from telegram.ext import Application, MessageHandler, filters, ContextTypes
 from openai import OpenAI
 
-# Logging configuration
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 
-# Environment variables
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 NVIDIA_API_KEY = os.environ.get("NVIDIA_API_KEY")
-LOG_URL = os.environ.get("LOG_URL", "https://storage.googleapis.com/q1-0b658cf4c1453ef/run.jsonl")
+LOG_URL = os.environ.get("LOG_URL", "https://storage.googleapis.com/q2-9b42d5a2f0465be/run.jsonl")
 
-# NVIDIA API Client Setup
 client = OpenAI(
     base_url="https://integrate.api.nvidia.com/v1",
     api_key=NVIDIA_API_KEY
 )
 
-# Multi-turn memory
 CHAT_HISTORIES = {}
 
 SYSTEM_PROMPT = f"""You are a Data Analyst AI agent.
@@ -62,7 +60,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     CHAT_HISTORIES[chat_id].append({"role": "user", "content": user_text})
 
     try:
-        # Fast & Reliable Llama 3.1 8B Model
         response = client.chat.completions.create(
             model="meta/llama-3.1-8b-instruct",
             messages=CHAT_HISTORIES[chat_id],
@@ -71,8 +68,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
         raw_content = response.choices[0].message.content.strip()
-        logging.info(f"Model raw output: {raw_content}")
-
         CHAT_HISTORIES[chat_id].append({"role": "assistant", "content": raw_content})
 
         if raw_content.strip().upper() == "OK":
@@ -103,11 +98,24 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         }
         await update.message.reply_text(json.dumps(fallback_response))
 
+class DummyHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"Bot Active")
+
+def run_dummy_server():
+    port = int(os.environ.get("PORT", 10000))
+    server = HTTPServer(("0.0.0.0", port), DummyHandler)
+    server.serve_forever()
+
 def main():
+    threading.Thread(target=run_dummy_server, daemon=True).start()
+
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
-    print("Bot running with Llama-3.1-8b (Fast Response)...")
+    print("Bot starting...")
     app.run_polling()
 
 if __name__ == "__main__":
